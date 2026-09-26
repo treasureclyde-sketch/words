@@ -1,0 +1,17 @@
+# Зависимости проекта. Установить: pip install -r requirements.txt
+#
+# python-telegram-bot[job-queue] — сам фреймворк бота + встроенный планировщик
+#   (JobQueue) для проверок по расписанию.
+python-telegram-bot[job-queue]==21.9
+
+# deep-translator — бесплатный перевод через Google Translate (без ключа).
+deep-translator==1.11.4
+
+# requests — простые HTTP-запросы к Free Dictionary API и DeepL.
+requests==2.32.3
+
+# python-dotenv — чтение настроек из файла .env.
+python-dotenv==1.0.1
+
+# inflect — грамматика английского: делает множественное число (car -> cars).
+inflect==7.4.0
