@@ -1,0 +1,19 @@
+# Локальные секреты для `wrangler dev` (запуск воркера на своём компе для теста).
+# Скопируй в .dev.vars и впиши значения:  cp .dev.vars.example .dev.vars
+#
+# На БОЕВОМ сервере эти значения задаются НЕ здесь, а командой
+# `wrangler secret put ИМЯ` (см. README) — так они хранятся в Cloudflare Secrets.
+
+# Токен бота от @BotFather (обязательно)
+BOT_TOKEN=your_telegram_bot_token_here
+
+# Твой Telegram user_id. 0 = отвечать всем (для теста).
+OWNER_USER_ID=0
+
+# Секретная строка, которой мы защищаем webhook (придумай любую случайную).
+# Telegram будет присылать её в заголовке, а мы проверять — чтобы чужой
+# не мог слать нам поддельные запросы.
+TELEGRAM_WEBHOOK_SECRET=change-me-to-a-random-string
+
+# (необязательно) Ключ DeepL. Пусто = используем бесплатные переводчики.
+DEEPL_API_KEY=

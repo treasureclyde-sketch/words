@@ -1,0 +1,30 @@
+# wrangler.toml — главный конфиг воркера Cloudflare.
+# wrangler — это утилита Cloudflare, которой мы запускаем и деплоим воркер.
+
+name = "word-bot"              # имя воркера (будет в адресе word-bot.<твой>.workers.dev)
+main = "src/index.js"          # точка входа
+compatibility_date = "2024-09-23"
+
+# ---- База данных D1 (это SQLite внутри Cloudflare) ----
+# ВАЖНО: database_id нужно вписать свой — его выдаст команда
+#   wrangler d1 create word-bot-db
+# (подробно в README.md). "binding = DB" означает, что в коде база
+# доступна как env.DB.
+[[d1_databases]]
+binding = "DB"
+database_name = "word-bot-db"
+database_id = "ВПИШИ_СЮДА_ID_БАЗЫ_D1"
+
+# ---- Расписание (Cron Trigger) ----
+# Это замена нашему JobQueue. Cloudflare сам вызывает функцию scheduled()
+# по этому расписанию. "*/15 * * * *" = каждые 15 минут.
+# Можно поставить "*/5 * * * *" (каждые 5 минут) — как в Python-версии.
+[triggers]
+crons = ["*/15 * * * *"]
+
+# ---- Обычные (несекретные) переменные ----
+# Секреты (BOT_TOKEN и т.п.) сюда НЕ пишем — их задаём отдельно командой
+# `wrangler secret put` (см. README). Здесь только безопасные значения.
+[vars]
+# OWNER_USER_ID лучше тоже задать секретом, но можно и тут. 0 = отвечать всем.
+# (оставь пустым здесь, если задашь секретом)
