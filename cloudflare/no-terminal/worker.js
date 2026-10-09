@@ -205,43 +205,45 @@ async function fetchFreeDictionary(word) {
     return result;
   } catch { return result; }
 }
-// Достаём JSON из текста ответа модели (на случай, если вокруг есть лишнее).
-function extractJson(text) {
-  if (!text) return {};
-  const start = text.indexOf("{"), end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end < start) return {};
-  try { return JSON.parse(text.slice(start, end + 1)); } catch { return {}; }
-}
-
-// Умный разбор слова через ИИ Cloudflare: перевод, определение, пример и
-// объяснение смысла для идиом/нюансов. Модель можно поменять на более крупную
-// (например @cf/meta/llama-3.3-70b-instruct-fp8-fast) для лучшего качества.
+// Умный разбор слова через ИИ Cloudflare. Используем простой построчный формат
+// (ключ: значение) — маленькой модели его держать проще, чем строгий JSON.
+// Модель можно поменять на более умную: @cf/meta/llama-3.3-70b-instruct-fp8-fast.
 async function aiWordInfo(word, env) {
   const empty = { translation: "", definition: "", example: "", note: "" };
   if (!env.AI) return empty;
   const system =
     "Ты — англо-русский учебный словарь для студента, готовящегося к Duolingo English Test. " +
-    "По английскому слову или фразе верни СТРОГО JSON с ключами: " +
-    "translation — естественный перевод на русский в начальной форме (для идиом и фраз передай СМЫСЛ, а не дословно); " +
-    "definition — короткое простое определение на английском; " +
-    "example — одно короткое естественное предложение-пример на английском; " +
-    "note — на русском: если это идиома/устойчивое выражение или есть важный нюанс употребления, кратко объясни реальный смысл и когда так говорят; иначе пустая строка. " +
-    "Верни ТОЛЬКО JSON-объект, без markdown и пояснений.";
+    "Отвечай СТРОГО в этом формате, каждое поле с новой строки, без markdown и лишних слов:\n" +
+    "TRANSLATION: <перевод на русский в начальной форме; для идиом и фраз передай СМЫСЛ, а не дословно>\n" +
+    "NOTE: <по-русски кратко объясни смысл, если это идиома/устойчивое выражение или есть важный нюанс употребления; если обычное слово — поставь прочерк ->\n" +
+    "DEFINITION: <короткое простое определение на английском>\n" +
+    "EXAMPLE: <одно короткое естественное предложение-пример на английском>";
   try {
     const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
       messages: [
         { role: "system", content: system },
         { role: "user", content: word },
       ],
-      max_tokens: 400,
+      max_tokens: 500,
     });
-    const p = extractJson(r?.response || "");
-    return {
-      translation: (p.translation || "").toString().trim(),
-      definition: (p.definition || "").toString().trim(),
-      example: (p.example || "").toString().trim(),
-      note: (p.note || "").toString().trim(),
+    const text = typeof r?.response === "string" ? r.response : JSON.stringify(r?.response || "");
+    const pick = (key) => {
+      const m = text.match(new RegExp("^\\s*" + key + "\\s*:?\\s*(.+)$", "mi"));
+      return m ? m[1].trim() : "";
     };
+    let note = pick("NOTE");
+    if (note === "-" || note === "—" || note.toLowerCase() === "none") note = "";
+    const result = {
+      translation: pick("TRANSLATION"),
+      note,
+      definition: pick("DEFINITION"),
+      example: pick("EXAMPLE"),
+    };
+    // Если распарсить не вышло — залогируем сырой ответ, чтобы увидеть причину.
+    if (!result.translation && !result.definition) {
+      console.log("aiWordInfo unparsed:", text.slice(0, 400));
+    }
+    return result;
   } catch (e) {
     console.error("aiWordInfo failed:", e);
     return empty;

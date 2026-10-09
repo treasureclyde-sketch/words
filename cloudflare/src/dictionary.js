@@ -135,42 +135,34 @@ async function fetchFreeDictionary(word) {
   }
 }
 
-// Достаём JSON из текста ответа модели.
-function extractJson(text) {
-  if (!text) return {};
-  const start = text.indexOf("{"), end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end < start) return {};
-  try { return JSON.parse(text.slice(start, end + 1)); } catch { return {}; }
-}
-
-// Умный разбор слова через ИИ Cloudflare: перевод, определение, пример,
-// объяснение смысла для идиом/нюансов.
+// Умный разбор слова через ИИ Cloudflare. Построчный формат (ключ: значение) —
+// надёжнее строгого JSON для маленькой модели.
 async function aiWordInfo(word, env) {
   const empty = { translation: "", definition: "", example: "", note: "" };
   if (!env.AI) return empty;
   const system =
     "Ты — англо-русский учебный словарь для студента, готовящегося к Duolingo English Test. " +
-    "По английскому слову или фразе верни СТРОГО JSON с ключами: " +
-    "translation — естественный перевод на русский в начальной форме (для идиом передай СМЫСЛ, не дословно); " +
-    "definition — короткое простое определение на английском; " +
-    "example — одно короткое предложение-пример на английском; " +
-    "note — на русском: если это идиома/устойчивое выражение или есть важный нюанс, кратко объясни реальный смысл; иначе пустая строка. " +
-    "Верни ТОЛЬКО JSON-объект.";
+    "Отвечай СТРОГО в этом формате, каждое поле с новой строки, без markdown и лишних слов:\n" +
+    "TRANSLATION: <перевод на русский в начальной форме; для идиом и фраз передай СМЫСЛ, а не дословно>\n" +
+    "NOTE: <по-русски кратко объясни смысл, если это идиома/устойчивое выражение или есть важный нюанс; если обычное слово — поставь прочерк ->\n" +
+    "DEFINITION: <короткое простое определение на английском>\n" +
+    "EXAMPLE: <одно короткое естественное предложение-пример на английском>";
   try {
     const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
       messages: [
         { role: "system", content: system },
         { role: "user", content: word },
       ],
-      max_tokens: 400,
+      max_tokens: 500,
     });
-    const p = extractJson(r?.response || "");
-    return {
-      translation: (p.translation || "").toString().trim(),
-      definition: (p.definition || "").toString().trim(),
-      example: (p.example || "").toString().trim(),
-      note: (p.note || "").toString().trim(),
+    const text = typeof r?.response === "string" ? r.response : JSON.stringify(r?.response || "");
+    const pick = (key) => {
+      const m = text.match(new RegExp("^\\s*" + key + "\\s*:?\\s*(.+)$", "mi"));
+      return m ? m[1].trim() : "";
     };
+    let note = pick("NOTE");
+    if (note === "-" || note === "—" || note.toLowerCase() === "none") note = "";
+    return { translation: pick("TRANSLATION"), note, definition: pick("DEFINITION"), example: pick("EXAMPLE") };
   } catch {
     return empty;
   }
