@@ -147,25 +147,33 @@ async function aiWordInfo(word, env) {
     "NOTE: <по-русски кратко объясни смысл, если это идиома/устойчивое выражение или есть важный нюанс; если обычное слово — поставь прочерк ->\n" +
     "DEFINITION: <короткое простое определение на английском>\n" +
     "EXAMPLE: <одно короткое естественное предложение-пример на английском>";
-  try {
-    const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: word },
-      ],
-      max_tokens: 500,
-    });
-    const text = typeof r?.response === "string" ? r.response : JSON.stringify(r?.response || "");
-    const pick = (key) => {
-      const m = text.match(new RegExp("^\\s*" + key + "\\s*:?\\s*(.+)$", "mi"));
-      return m ? m[1].trim() : "";
-    };
-    let note = pick("NOTE");
-    if (note === "-" || note === "—" || note.toLowerCase() === "none") note = "";
-    return { translation: pick("TRANSLATION"), note, definition: pick("DEFINITION"), example: pick("EXAMPLE") };
-  } catch {
-    return empty;
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: word },
+  ];
+  const models = [
+    "@cf/meta/llama-3.1-8b-instruct",
+    "@cf/meta/llama-3-8b-instruct",
+    "@cf/mistral/mistral-7b-instruct-v0.1",
+  ];
+  let text = "";
+  for (const model of models) {
+    try {
+      const r = await env.AI.run(model, { messages, max_tokens: 500 });
+      text = typeof r?.response === "string" ? r.response : JSON.stringify(r?.response || "");
+      if (text) break;
+    } catch (e) {
+      console.error("LLM failed [" + model + "]:", e && e.message ? e.message : String(e));
+    }
   }
+  if (!text) return empty;
+  const pick = (key) => {
+    const m = text.match(new RegExp("^\\s*" + key + "\\s*:?\\s*(.+)$", "mi"));
+    return m ? m[1].trim() : "";
+  };
+  let note = pick("NOTE");
+  if (note === "-" || note === "—" || note.toLowerCase() === "none") note = "";
+  return { translation: pick("TRANSLATION"), note, definition: pick("DEFINITION"), example: pick("EXAMPLE") };
 }
 
 // Собираем всё о слове в один объект.

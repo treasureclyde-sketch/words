@@ -218,36 +218,45 @@ async function aiWordInfo(word, env) {
     "NOTE: <по-русски кратко объясни смысл, если это идиома/устойчивое выражение или есть важный нюанс употребления; если обычное слово — поставь прочерк ->\n" +
     "DEFINITION: <короткое простое определение на английском>\n" +
     "EXAMPLE: <одно короткое естественное предложение-пример на английском>";
-  try {
-    const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: word },
-      ],
-      max_tokens: 500,
-    });
-    const text = typeof r?.response === "string" ? r.response : JSON.stringify(r?.response || "");
-    const pick = (key) => {
-      const m = text.match(new RegExp("^\\s*" + key + "\\s*:?\\s*(.+)$", "mi"));
-      return m ? m[1].trim() : "";
-    };
-    let note = pick("NOTE");
-    if (note === "-" || note === "—" || note.toLowerCase() === "none") note = "";
-    const result = {
-      translation: pick("TRANSLATION"),
-      note,
-      definition: pick("DEFINITION"),
-      example: pick("EXAMPLE"),
-    };
-    // Если распарсить не вышло — залогируем сырой ответ, чтобы увидеть причину.
-    if (!result.translation && !result.definition) {
-      console.log("aiWordInfo unparsed:", text.slice(0, 400));
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: word },
+  ];
+  // Пробуем несколько моделей по очереди: если одна недоступна на аккаунте —
+  // берём следующую. В лог пишем точную причину ошибки по каждой.
+  const models = [
+    "@cf/meta/llama-3.1-8b-instruct",
+    "@cf/meta/llama-3-8b-instruct",
+    "@cf/mistral/mistral-7b-instruct-v0.1",
+  ];
+  let text = "";
+  for (const model of models) {
+    try {
+      const r = await env.AI.run(model, { messages, max_tokens: 500 });
+      text = typeof r?.response === "string" ? r.response : JSON.stringify(r?.response || "");
+      if (text) break;
+    } catch (e) {
+      console.error("LLM failed [" + model + "]:", e && e.message ? e.message : String(e));
     }
-    return result;
-  } catch (e) {
-    console.error("aiWordInfo failed:", e);
-    return empty;
   }
+  if (!text) return empty;
+
+  const pick = (key) => {
+    const m = text.match(new RegExp("^\\s*" + key + "\\s*:?\\s*(.+)$", "mi"));
+    return m ? m[1].trim() : "";
+  };
+  let note = pick("NOTE");
+  if (note === "-" || note === "—" || note.toLowerCase() === "none") note = "";
+  const result = {
+    translation: pick("TRANSLATION"),
+    note,
+    definition: pick("DEFINITION"),
+    example: pick("EXAMPLE"),
+  };
+  if (!result.translation && !result.definition) {
+    console.log("aiWordInfo unparsed:", text.slice(0, 400));
+  }
+  return result;
 }
 
 async function lookup(word, env) {
