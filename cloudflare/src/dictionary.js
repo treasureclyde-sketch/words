@@ -1,202 +1,83 @@
-// dictionary.js — получаем данные о слове из интернета.
-// Аналог dictionary.py, но на JS: вместо библиотек делаем прямые HTTP-запросы
-// через встроенный fetch (он есть в Workers "из коробки").
+// dictionary.js — умный словарь через Claude (Anthropic API) + множественное число.
+//
+// Один запрос к Claude возвращает транскрипцию, перевод, смысл идиомы,
+// определение и пример. Нужен секрет ANTHROPIC_API_KEY; модель задаётся
+// секретом CLAUDE_MODEL (по умолчанию claude-sonnet-5-5).
 
 import pluralize from "pluralize";
 
-const HTTP_TIMEOUT_MS = 8000;
-
-// Небольшой помощник: fetch с таймаутом, чтобы воркер не ждал вечно.
-async function fetchWithTimeout(url, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
+async function askClaude(word, env) {
+  const empty = { phonetic: "", translation: "", definition: "", example: "", note: "" };
+  if (!env.ANTHROPIC_API_KEY) {
+    console.error("ANTHROPIC_API_KEY не задан — добавь секрет в настройках воркера.");
+    return empty;
   }
-}
-
-// --- Перевод на русский: пробуем DeepL (если есть ключ) → Google → MyMemory ---
-
-async function translateDeepL(word, env) {
-  if (!env.DEEPL_API_KEY) return "";
-  try {
-    const resp = await fetchWithTimeout("https://api-free.deepl.com/v2/translate", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        auth_key: env.DEEPL_API_KEY,
-        text: word,
-        source_lang: "EN",
-        target_lang: "RU",
-      }),
-    });
-    if (!resp.ok) return "";
-    const data = await resp.json();
-    return data?.translations?.[0]?.text || "";
-  } catch {
-    return "";
-  }
-}
-
-async function translateGoogle(word) {
-  // Бесплатный (неофициальный) endpoint Google Translate, без ключа.
-  // Ответ — вложенные массивы; текст перевода лежит в data[0][*][0].
-  try {
-    const url =
-      "https://translate.googleapis.com/translate_a/single?client=gtx" +
-      "&sl=en&tl=ru&dt=t&q=" + encodeURIComponent(word);
-    const resp = await fetchWithTimeout(url);
-    if (!resp.ok) return "";
-    const data = await resp.json();
-    if (!Array.isArray(data?.[0])) return "";
-    return data[0].map((seg) => seg[0]).join("");
-  } catch {
-    return "";
-  }
-}
-
-async function translateMyMemory(word) {
-  // Запасной бесплатный сервис без ключа.
-  try {
-    const url =
-      "https://api.mymemory.translated.net/get?langpair=en|ru&q=" +
-      encodeURIComponent(word);
-    const resp = await fetchWithTimeout(url);
-    if (!resp.ok) return "";
-    const data = await resp.json();
-    return data?.responseData?.translatedText || "";
-  } catch {
-    return "";
-  }
-}
-
-// Встроенный ИИ-переводчик Cloudflare (Workers AI) — работает на серверах
-// Cloudflare без внешних лимитов. Требует привязку Workers AI (переменная AI).
-async function translateWorkersAI(word, env) {
-  if (!env.AI) return "";
-  try {
-    const r = await env.AI.run("@cf/meta/m2m100-1.2b", {
-      text: word, source_lang: "english", target_lang: "russian",
-    });
-    return r?.translated_text || "";
-  } catch {
-    return "";
-  }
-}
-
-export async function translateToRussian(word, env) {
-  return (
-    (await translateDeepL(word, env)) ||
-    (await translateWorkersAI(word, env)) ||
-    (await translateGoogle(word)) ||
-    (await translateMyMemory(word)) ||
-    ""
-  );
-}
-
-// --- Транскрипция, определение, пример из Free Dictionary API ---
-
-async function fetchFreeDictionary(word) {
-  const result = { phonetic: "", definition: "", example: "", found: false };
-  try {
-    const resp = await fetchWithTimeout(
-      "https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word)
-    );
-    if (resp.status === 404) return result; // слова нет в словаре — это нормально
-    if (!resp.ok) return result;
-    const data = await resp.json();
-    if (!Array.isArray(data) || data.length === 0) return result;
-
-    const entry = data[0];
-    result.found = true;
-
-    // Транскрипция
-    result.phonetic = entry.phonetic || "";
-    if (!result.phonetic && Array.isArray(entry.phonetics)) {
-      for (const ph of entry.phonetics) {
-        if (ph.text) { result.phonetic = ph.text; break; }
-      }
-    }
-
-    // Определение и пример (берём первые попавшиеся)
-    for (const meaning of entry.meanings || []) {
-      for (const d of meaning.definitions || []) {
-        if (!result.definition && d.definition) result.definition = d.definition;
-        if (!result.example && d.example) result.example = d.example;
-        if (result.definition && result.example) break;
-      }
-      if (result.definition && result.example) break;
-    }
-    return result;
-  } catch {
-    return result;
-  }
-}
-
-// Умный разбор слова через ИИ Cloudflare. Построчный формат (ключ: значение) —
-// надёжнее строгого JSON для маленькой модели.
-async function aiWordInfo(word, env) {
-  const empty = { translation: "", definition: "", example: "", note: "" };
-  if (!env.AI) return empty;
   const system =
-    "Ты — англо-русский учебный словарь для студента, готовящегося к Duolingo English Test. " +
-    "Отвечай СТРОГО в этом формате, каждое поле с новой строки, без markdown и лишних слов:\n" +
+    "Ты — англо-русский учебный словарь для студента, который готовится к Duolingo English Test. " +
+    "По английскому слову или фразе ответь СТРОГО в этом формате — каждое поле с новой строки, без markdown и лишнего текста:\n" +
+    "PHONETIC: <транскрипция IPA в слешах, например /ˈstriːmlaɪn/; если не уверен — оставь пустым>\n" +
     "TRANSLATION: <перевод на русский в начальной форме; для идиом и фраз передай СМЫСЛ, а не дословно>\n" +
-    "NOTE: <по-русски кратко объясни смысл, если это идиома/устойчивое выражение или есть важный нюанс; если обычное слово — поставь прочерк ->\n" +
+    "NOTE: <по-русски кратко объясни смысл и когда так говорят, если это идиома/устойчивое выражение или есть важный нюанс; если обычное слово — поставь прочерк ->\n" +
     "DEFINITION: <короткое простое определение на английском>\n" +
     "EXAMPLE: <одно короткое естественное предложение-пример на английском>";
-  const messages = [
-    { role: "system", content: system },
-    { role: "user", content: word },
-  ];
-  const models = [
-    "@cf/meta/llama-3.1-8b-instruct",
-    "@cf/meta/llama-3-8b-instruct",
-    "@cf/mistral/mistral-7b-instruct-v0.1",
-  ];
-  let text = "";
-  for (const model of models) {
-    try {
-      const r = await env.AI.run(model, { messages, max_tokens: 500 });
-      text = typeof r?.response === "string" ? r.response : JSON.stringify(r?.response || "");
-      if (text) break;
-    } catch (e) {
-      console.error("LLM failed [" + model + "]:", e && e.message ? e.message : String(e));
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: env.CLAUDE_MODEL || "claude-sonnet-5-5",
+        max_tokens: 600,
+        system,
+        messages: [{ role: "user", content: word }],
+      }),
+    });
+    if (!resp.ok) {
+      console.error("Anthropic API error:", resp.status, (await resp.text()).slice(0, 300));
+      return empty;
     }
+    const data = await resp.json();
+    const text = (data.content || [])
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+    const pick = (key) => {
+      const m = text.match(new RegExp("^\\s*" + key + "\\s*:?\\s*(.+)$", "mi"));
+      return m ? m[1].trim() : "";
+    };
+    let note = pick("NOTE");
+    if (note === "-" || note === "—" || note.toLowerCase() === "none") note = "";
+    return {
+      phonetic: pick("PHONETIC"),
+      translation: pick("TRANSLATION"),
+      note,
+      definition: pick("DEFINITION"),
+      example: pick("EXAMPLE"),
+    };
+  } catch (e) {
+    console.error("askClaude failed:", e && e.message ? e.message : String(e));
+    return empty;
   }
-  if (!text) return empty;
-  const pick = (key) => {
-    const m = text.match(new RegExp("^\\s*" + key + "\\s*:?\\s*(.+)$", "mi"));
-    return m ? m[1].trim() : "";
-  };
-  let note = pick("NOTE");
-  if (note === "-" || note === "—" || note.toLowerCase() === "none") note = "";
-  return { translation: pick("TRANSLATION"), note, definition: pick("DEFINITION"), example: pick("EXAMPLE") };
 }
 
-// Собираем всё о слове в один объект.
 export async function lookup(word, env) {
   word = word.trim();
-  const [dict, ai] = await Promise.all([
-    fetchFreeDictionary(word),
-    aiWordInfo(word, env),
-  ]);
-  const translation = ai.translation || (await translateToRussian(word, env));
+  const ai = await askClaude(word, env);
   return {
     word,
-    phonetic: dict.phonetic,
-    translation,
-    definition: ai.definition || dict.definition,
-    example: ai.example || dict.example,
-    note: ai.note || "",
-    found: !!(translation || ai.definition || dict.definition),
+    phonetic: ai.phonetic,
+    translation: ai.translation,
+    definition: ai.definition,
+    example: ai.example,
+    note: ai.note,
+    found: !!(ai.translation || ai.definition),
   };
 }
 
-// Множественное число (car → cars, city → cities). Пакет pluralize знает
-// правила английского и исключения (child → children).
+// Множественное число (car → cars, child → children) — офлайн, через pluralize.
 export function plural(word) {
   return pluralize.plural(word.trim());
 }
