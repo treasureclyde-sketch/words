@@ -72,9 +72,24 @@ async function translateMyMemory(word) {
   }
 }
 
+// Встроенный ИИ-переводчик Cloudflare (Workers AI) — работает на серверах
+// Cloudflare без внешних лимитов. Требует привязку Workers AI (переменная AI).
+async function translateWorkersAI(word, env) {
+  if (!env.AI) return "";
+  try {
+    const r = await env.AI.run("@cf/meta/m2m100-1.2b", {
+      text: word, source_lang: "english", target_lang: "russian",
+    });
+    return r?.translated_text || "";
+  } catch {
+    return "";
+  }
+}
+
 export async function translateToRussian(word, env) {
   return (
     (await translateDeepL(word, env)) ||
+    (await translateWorkersAI(word, env)) ||
     (await translateGoogle(word)) ||
     (await translateMyMemory(word)) ||
     ""

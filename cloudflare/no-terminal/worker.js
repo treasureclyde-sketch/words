@@ -158,8 +158,28 @@ async function translateMyMemory(word) {
     return data?.responseData?.translatedText || "";
   } catch { return ""; }
 }
+// Встроенный ИИ-переводчик Cloudflare (Workers AI). Работает на серверах
+// Cloudflare, без внешних лимитов — самый надёжный вариант отсюда.
+// Требует привязку Workers AI с именем переменной  AI  (см. README).
+async function translateWorkersAI(word, env) {
+  if (!env.AI) return "";
+  try {
+    const r = await env.AI.run("@cf/meta/m2m100-1.2b", {
+      text: word, source_lang: "english", target_lang: "russian",
+    });
+    return r?.translated_text || "";
+  } catch (e) {
+    console.error("Workers AI translate failed:", e);
+    return "";
+  }
+}
 async function translateToRussian(word, env) {
-  return (await translateDeepL(word, env)) || (await translateGoogle(word)) || (await translateMyMemory(word)) || "";
+  // Порядок: DeepL (если есть ключ) → встроенный ИИ Cloudflare → Google → MyMemory.
+  return (await translateDeepL(word, env))
+    || (await translateWorkersAI(word, env))
+    || (await translateGoogle(word))
+    || (await translateMyMemory(word))
+    || "";
 }
 async function fetchFreeDictionary(word) {
   const result = { phonetic: "", definition: "", example: "", found: false };
