@@ -35,9 +35,9 @@ function buildWordCard(info) {
   if (info.phonetic) head += `  <code>${esc(info.phonetic)}</code>`;
   lines.push(head);
   if (info.translation) lines.push(`🇷🇺 ${esc(info.translation)}`);
+  if (info.note) lines.push(`\n💡 ${esc(info.note)}`);
   if (info.definition) lines.push(`\n📖 <i>${esc(info.definition)}</i>`);
   if (info.example) lines.push(`✏️ <i>${esc(info.example)}</i>`);
-  if (!info.found) lines.push(`\n<i>(нет в англ. словаре — показываю только перевод)</i>`);
   return lines.join("\n");
 }
 

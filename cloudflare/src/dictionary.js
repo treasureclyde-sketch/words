@@ -135,21 +135,63 @@ async function fetchFreeDictionary(word) {
   }
 }
 
+// Достаём JSON из текста ответа модели.
+function extractJson(text) {
+  if (!text) return {};
+  const start = text.indexOf("{"), end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) return {};
+  try { return JSON.parse(text.slice(start, end + 1)); } catch { return {}; }
+}
+
+// Умный разбор слова через ИИ Cloudflare: перевод, определение, пример,
+// объяснение смысла для идиом/нюансов.
+async function aiWordInfo(word, env) {
+  const empty = { translation: "", definition: "", example: "", note: "" };
+  if (!env.AI) return empty;
+  const system =
+    "Ты — англо-русский учебный словарь для студента, готовящегося к Duolingo English Test. " +
+    "По английскому слову или фразе верни СТРОГО JSON с ключами: " +
+    "translation — естественный перевод на русский в начальной форме (для идиом передай СМЫСЛ, не дословно); " +
+    "definition — короткое простое определение на английском; " +
+    "example — одно короткое предложение-пример на английском; " +
+    "note — на русском: если это идиома/устойчивое выражение или есть важный нюанс, кратко объясни реальный смысл; иначе пустая строка. " +
+    "Верни ТОЛЬКО JSON-объект.";
+  try {
+    const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: word },
+      ],
+      max_tokens: 400,
+    });
+    const p = extractJson(r?.response || "");
+    return {
+      translation: (p.translation || "").toString().trim(),
+      definition: (p.definition || "").toString().trim(),
+      example: (p.example || "").toString().trim(),
+      note: (p.note || "").toString().trim(),
+    };
+  } catch {
+    return empty;
+  }
+}
+
 // Собираем всё о слове в один объект.
 export async function lookup(word, env) {
   word = word.trim();
-  // Запускаем оба запроса параллельно — так быстрее.
-  const [info, translation] = await Promise.all([
+  const [dict, ai] = await Promise.all([
     fetchFreeDictionary(word),
-    translateToRussian(word, env),
+    aiWordInfo(word, env),
   ]);
+  const translation = ai.translation || (await translateToRussian(word, env));
   return {
     word,
-    phonetic: info.phonetic,
+    phonetic: dict.phonetic,
     translation,
-    definition: info.definition,
-    example: info.example,
-    found: info.found,
+    definition: ai.definition || dict.definition,
+    example: ai.example || dict.example,
+    note: ai.note || "",
+    found: !!(translation || ai.definition || dict.definition),
   };
 }
 

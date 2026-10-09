@@ -205,10 +205,64 @@ async function fetchFreeDictionary(word) {
     return result;
   } catch { return result; }
 }
+// Достаём JSON из текста ответа модели (на случай, если вокруг есть лишнее).
+function extractJson(text) {
+  if (!text) return {};
+  const start = text.indexOf("{"), end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) return {};
+  try { return JSON.parse(text.slice(start, end + 1)); } catch { return {}; }
+}
+
+// Умный разбор слова через ИИ Cloudflare: перевод, определение, пример и
+// объяснение смысла для идиом/нюансов. Модель можно поменять на более крупную
+// (например @cf/meta/llama-3.3-70b-instruct-fp8-fast) для лучшего качества.
+async function aiWordInfo(word, env) {
+  const empty = { translation: "", definition: "", example: "", note: "" };
+  if (!env.AI) return empty;
+  const system =
+    "Ты — англо-русский учебный словарь для студента, готовящегося к Duolingo English Test. " +
+    "По английскому слову или фразе верни СТРОГО JSON с ключами: " +
+    "translation — естественный перевод на русский в начальной форме (для идиом и фраз передай СМЫСЛ, а не дословно); " +
+    "definition — короткое простое определение на английском; " +
+    "example — одно короткое естественное предложение-пример на английском; " +
+    "note — на русском: если это идиома/устойчивое выражение или есть важный нюанс употребления, кратко объясни реальный смысл и когда так говорят; иначе пустая строка. " +
+    "Верни ТОЛЬКО JSON-объект, без markdown и пояснений.";
+  try {
+    const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: word },
+      ],
+      max_tokens: 400,
+    });
+    const p = extractJson(r?.response || "");
+    return {
+      translation: (p.translation || "").toString().trim(),
+      definition: (p.definition || "").toString().trim(),
+      example: (p.example || "").toString().trim(),
+      note: (p.note || "").toString().trim(),
+    };
+  } catch (e) {
+    console.error("aiWordInfo failed:", e);
+    return empty;
+  }
+}
+
 async function lookup(word, env) {
   word = word.trim();
-  const [info, translation] = await Promise.all([fetchFreeDictionary(word), translateToRussian(word, env)]);
-  return { word, phonetic: info.phonetic, translation, definition: info.definition, example: info.example, found: info.found };
+  // Параллельно: ИИ-разбор и словарь (словарь нужен в основном ради транскрипции).
+  const [dict, ai] = await Promise.all([fetchFreeDictionary(word), aiWordInfo(word, env)]);
+  // Если ИИ не дал перевод — подстрахуемся обычными переводчиками.
+  const translation = ai.translation || (await translateToRussian(word, env));
+  return {
+    word,
+    phonetic: dict.phonetic,                 // точная транскрипция — из словаря, если есть
+    translation,
+    definition: ai.definition || dict.definition,
+    example: ai.example || dict.example,
+    note: ai.note || "",
+    found: !!(translation || ai.definition || dict.definition),
+  };
 }
 
 
@@ -301,9 +355,9 @@ function buildWordCard(info) {
   if (info.phonetic) head += `  <code>${esc(info.phonetic)}</code>`;
   lines.push(head);
   if (info.translation) lines.push(`🇷🇺 ${esc(info.translation)}`);
+  if (info.note) lines.push(`\n💡 ${esc(info.note)}`);
   if (info.definition) lines.push(`\n📖 <i>${esc(info.definition)}</i>`);
   if (info.example) lines.push(`✏️ <i>${esc(info.example)}</i>`);
-  if (!info.found) lines.push(`\n<i>(нет в англ. словаре — показываю только перевод)</i>`);
   return lines.join("\n");
 }
 function buildKeyboard(wordId) {
